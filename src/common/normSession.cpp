@@ -560,17 +560,20 @@ bool NormSession::OpenAMTGateway()
         return false;
     }
 
-    // Build sockaddr structures for relay, group, and source via getaddrinfo()
-    auto resolveAddr = [](const ProtoAddress& protoAddr, struct sockaddr_storage& ss, socklen_t& len) -> bool {
+    // Build sockaddr structures for relay, group, and source via getaddrinfo().
+    // family: AF_INET or AF_INET6 to constrain the result; AF_UNSPEC to accept either.
+    auto resolveAddr = [](const ProtoAddress& protoAddr, struct sockaddr_storage& ss, socklen_t& len,
+                          int family = AF_UNSPEC) -> bool {
         char host[256], port[16];
         if (!protoAddr.GetHostString(host, sizeof(host)))
             return false;
         snprintf(port, sizeof(port), "%u", protoAddr.GetPort());
         struct addrinfo hints, *res = NULL;
         memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_UNSPEC;
+        hints.ai_family = family;
         hints.ai_socktype = SOCK_DGRAM;
-        hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
+        // Use AI_NUMERICSERV always; drop AI_NUMERICHOST so hostnames resolve.
+        hints.ai_flags = AI_NUMERICSERV;
         if (0 != getaddrinfo(host, protoAddr.GetPort() ? port : NULL, &hints, &res) || !res)
             return false;
         memcpy(&ss, res->ai_addr, res->ai_addrlen);
@@ -582,9 +585,9 @@ bool NormSession::OpenAMTGateway()
     struct sockaddr_storage relay_ss, group_ss, source_ss;
     socklen_t relay_len = 0, group_len = 0, source_len = 0;
 
-    if (!resolveAddr(amt_relay_addr, relay_ss, relay_len))
+    if (!resolveAddr(amt_relay_addr, relay_ss, relay_len, AF_INET))
     {
-        fprintf(stderr, "normAMT error: could not resolve relay address\n");
+        fprintf(stderr, "normAMT error: could not resolve relay address (IPv4)\n");
         return false;
     }
     if (!resolveAddr(address, group_ss, group_len))
