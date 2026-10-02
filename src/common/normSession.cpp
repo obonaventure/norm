@@ -7,8 +7,10 @@
 #include <time.h> // for gmtime() in NormTrace()
 #ifdef NORM_AMT
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -596,13 +598,26 @@ bool NormSession::OpenAMTGateway()
         return false;
     }
 
+    {
+        char rhost[64], ghost[64], shost[64];
+        getnameinfo((struct sockaddr*)&relay_ss,  relay_len,  rhost, sizeof(rhost), NULL, 0, NI_NUMERICHOST);
+        getnameinfo((struct sockaddr*)&group_ss,  group_len,  ghost, sizeof(ghost), NULL, 0, NI_NUMERICHOST);
+        getnameinfo((struct sockaddr*)&source_ss, source_len, shost, sizeof(shost), NULL, 0, NI_NUMERICHOST);
+        PLOG(PL_INFO, "NormSession::OpenAMTGateway() relay=%s:%u group=%s source=%s\n",
+             rhost,
+             relay_ss.ss_family == AF_INET  ? ntohs(((struct sockaddr_in*)&relay_ss)->sin_port)
+                                            : ntohs(((struct sockaddr_in6*)&relay_ss)->sin6_port),
+             ghost, shost);
+    }
+
     amt_gateway = amt_gateway_open((struct sockaddr*)&relay_ss, relay_len,
                                    (struct sockaddr*)&group_ss, group_len,
                                    (struct sockaddr*)&source_ss, source_len,
                                    1 /* SSM */, 5000 /* ms */, 3 /* retries */);
     if (!amt_gateway)
     {
-        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: amt_gateway_open() failed: %s\n", GetErrorString());
+        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: amt_gateway_open() failed (errno=%d: %s)\n",
+             errno, strerror(errno));
         return false;
     }
 
