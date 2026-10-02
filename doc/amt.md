@@ -85,9 +85,10 @@ normCast recv /tmp/rx addr 232.1.2.3/7000 id 2 ssm 192.0.2.1 amt 203.0.113.5
 | Option | Side | Description |
 |---|---|---|
 | `addr <group>[/<port>]` | both | Multicast group address and port |
-| `ssm <sourceAddr>` | receiver | Sender's unicast IP (required for AMT) |
+| `srcaddr <addr>` | sender | Source IP for outgoing packets; also sets the multicast output interface |
+| `ssm <sourceAddr>` | receiver | Sender's unicast IP (required for AMT; must match `srcaddr` on the sender) |
 | `amt <relayAddr>[:<port>]` | receiver | AMT relay address; activates tunneling |
-| `interface <name>` | both | Network interface to use |
+| `interface <name>` | both | Network interface to use (by name, e.g. `eth0`) |
 
 ## Limitations
 

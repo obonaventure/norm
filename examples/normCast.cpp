@@ -897,7 +897,7 @@ void Usage()
                     "                [repeat <interval> [updatesOnly]] [id <nodeIdInteger>]\n"
                     "                [addr <addr>[/<port>]][txaddr <addr>[/<port>]][txport <port>]\n"
                     "                [interface <name>][reuse][loopback]\n"
-                    "                [ssm <sourceAddr>][amt <relayAddr>]\n"
+                    "                [ssm <sourceAddr>][amt <relayAddr>][srcaddr <addr>]\n"
                     "                [ack auto|<node1>[,<node2>,...]] [segment <bytes>]\n"
                     "                [block <count>] [parity <count>] [auto <count>]\n"
                     "                [cc|cce|ccl|rate <bitsPerSecond>] [rxloss <lossFraction>]\n"
@@ -927,6 +927,7 @@ int main(int argc, char* argv[])
     char sessionTxAddr[64];
     sessionTxAddr[0] = '\0';
     unsigned int sessionTxPort = 0;
+    const char* srcAddr = NULL; // sender source address
     
     
     bool autoAck = false;
@@ -1254,6 +1255,16 @@ int main(int argc, char* argv[])
                 return -1;
             }
             amtRelay = argv[i++];
+        }
+        else if (0 == strncmp(cmd, "srcaddr", len))
+        {
+            if (i >= argc)
+            {
+                fprintf(stderr, "normCast error: missing 'srcaddr' <addr>!\n");
+                Usage();
+                return -1;
+            }
+            srcAddr = argv[i++];
         }
         else if (0 == strncmp(cmd, "buffer", len))
         {
@@ -1602,6 +1613,23 @@ int main(int argc, char* argv[])
         normCast.SetNormTxRate(txRate);
     if (NULL != mcastIface)
         normCast.SetNormMulticastInterface(mcastIface);
+    if (NULL != srcAddr)
+    {
+        // Bind the tx socket to this source address so outgoing packets
+        // carry it, and set it as the multicast output interface.
+        if (!NormSetTxPort(normCast.GetSession(), 0, false, srcAddr))
+        {
+            fprintf(stderr, "normCast error: NormSetTxPort srcaddr '%s' failed\n", srcAddr);
+            NormDestroyInstance(normInstance);
+            return -1;
+        }
+        if (!NormSetMulticastInterface(normCast.GetSession(), srcAddr))
+        {
+            fprintf(stderr, "normCast error: NormSetMulticastInterface srcaddr '%s' failed\n", srcAddr);
+            NormDestroyInstance(normInstance);
+            return -1;
+        }
+    }
     if (NULL != ssmSource)
     {
         if (!NormSetSSM(normCast.GetSession(), ssmSource))
