@@ -528,17 +528,27 @@ bool NormSession::SetAMTRelay(const char *relayAddress)
 #ifdef NORM_AMT
     if (NULL != relayAddress)
     {
-        if (amt_relay_addr.ResolveFromString(relayAddress))
+        // Force IPv4 resolution: libamt only supports IPv4 AMT transport.
+        // Use getaddrinfo(AF_INET) directly so hostnames with both A and AAAA
+        // records resolve to an IPv4 address instead of IPv6.
+        struct addrinfo hints, *res = NULL;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family   = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        if (0 == getaddrinfo(relayAddress, NULL, &hints, &res) && res)
         {
-            if (!amt_relay_addr.GetPort())
-                amt_relay_addr.SetPort(2268); // default AMT port
-            return true;
+            char ipstr[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &((struct sockaddr_in*)res->ai_addr)->sin_addr,
+                      ipstr, sizeof(ipstr));
+            freeaddrinfo(res);
+            if (amt_relay_addr.ResolveFromString(ipstr))
+            {
+                amt_relay_addr.SetPort(2268);
+                return true;
+            }
         }
-        else
-        {
-            PLOG(PL_ERROR, "NormSession::SetAMTRelay() error: invalid relay address\n");
-            return false;
-        }
+        fprintf(stderr, "normAMT error: could not resolve relay '%s' to an IPv4 address\n", relayAddress);
+        return false;
     }
     else
     {
