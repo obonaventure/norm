@@ -556,7 +556,7 @@ bool NormSession::OpenAMTGateway()
 {
     if (!ssm_source_addr.IsValid())
     {
-        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: SSM source address required for AMT\n");
+        fprintf(stderr, "normAMT error: SSM source address required for AMT\n");
         return false;
     }
 
@@ -584,17 +584,17 @@ bool NormSession::OpenAMTGateway()
 
     if (!resolveAddr(amt_relay_addr, relay_ss, relay_len))
     {
-        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: could not resolve relay address\n");
+        fprintf(stderr, "normAMT error: could not resolve relay address\n");
         return false;
     }
     if (!resolveAddr(address, group_ss, group_len))
     {
-        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: could not resolve group address\n");
+        fprintf(stderr, "normAMT error: could not resolve group address\n");
         return false;
     }
     if (!resolveAddr(ssm_source_addr, source_ss, source_len))
     {
-        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: could not resolve SSM source address\n");
+        fprintf(stderr, "normAMT error: could not resolve SSM source address\n");
         return false;
     }
 
@@ -603,10 +603,10 @@ bool NormSession::OpenAMTGateway()
         getnameinfo((struct sockaddr*)&relay_ss,  relay_len,  rhost, sizeof(rhost), NULL, 0, NI_NUMERICHOST);
         getnameinfo((struct sockaddr*)&group_ss,  group_len,  ghost, sizeof(ghost), NULL, 0, NI_NUMERICHOST);
         getnameinfo((struct sockaddr*)&source_ss, source_len, shost, sizeof(shost), NULL, 0, NI_NUMERICHOST);
-        PLOG(PL_INFO, "NormSession::OpenAMTGateway() relay=%s:%u group=%s source=%s\n",
+        fprintf(stderr, "normAMT: relay=%s:%u group=%s source=%s\n",
              rhost,
-             relay_ss.ss_family == AF_INET  ? ntohs(((struct sockaddr_in*)&relay_ss)->sin_port)
-                                            : ntohs(((struct sockaddr_in6*)&relay_ss)->sin6_port),
+             (unsigned)(relay_ss.ss_family == AF_INET  ? ntohs(((struct sockaddr_in*)&relay_ss)->sin_port)
+                                                        : ntohs(((struct sockaddr_in6*)&relay_ss)->sin6_port)),
              ghost, shost);
     }
 
@@ -616,7 +616,7 @@ bool NormSession::OpenAMTGateway()
                                    1 /* SSM */, 5000 /* ms */, 3 /* retries */);
     if (!amt_gateway)
     {
-        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: amt_gateway_open() failed (errno=%d: %s)\n",
+        fprintf(stderr, "normAMT error: amt_gateway_open() failed (errno=%d: %s)\n",
              errno, strerror(errno));
         return false;
     }
@@ -626,7 +626,7 @@ bool NormSession::OpenAMTGateway()
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
     {
-        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: fcntl(O_NONBLOCK) failed: %s\n", GetErrorString());
+        fprintf(stderr, "normAMT error: fcntl(O_NONBLOCK) failed: %s\n", strerror(errno));
         amt_gateway_close(amt_gateway);
         amt_gateway = NULL;
         return false;
