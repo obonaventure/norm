@@ -248,7 +248,8 @@ if(NORM_BUILD_EXAMPLES)
         target_link_libraries(${example} PRIVATE norm protokit::protokit)
     endforeach()
 
-    # normCast uses NormPostProcessor which requires the platform implementation
+    # normCast uses NormPostProcessor which requires the common + platform implementation
+    target_sources(normCast PRIVATE src/common/normPostProcess.cpp)
     if(WIN32)
         target_sources(normCast PRIVATE src/win32/win32PostProcess.cpp)
     else()
