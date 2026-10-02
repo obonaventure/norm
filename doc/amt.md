@@ -60,13 +60,17 @@ The sender transmits on the SSM group using standard multicast; no AMT
 options are needed:
 
 ```
-normCast send file.dat addr 232.1.2.3/7000 id 1 rate 1000000
+normCast send file.dat addr 232.1.2.3/7000 id 1 rate 1000000 srcaddr 192.0.2.1
 ```
+
+`srcaddr <addr>` pins outgoing packets to a specific source interface and is
+required when the sender has multiple addresses and the receiver's SSM filter
+must match a particular one.
 
 ### Receiver — native SSM (multicast routing available)
 
 ```
-normCast recv /tmp/rx addr 232.1.2.3/7000 id 2 ssm 192.0.2.1
+normCast recv /tmp/rx addr 232.1.2.3/7000 ssm 192.0.2.1
 ```
 
 `ssm <sourceAddr>` sets the SSM filter to the sender's IP address.
@@ -74,11 +78,15 @@ normCast recv /tmp/rx addr 232.1.2.3/7000 id 2 ssm 192.0.2.1
 ### Receiver — via AMT (no multicast routing)
 
 ```
-normCast recv /tmp/rx addr 232.1.2.3/7000 id 2 ssm 192.0.2.1 amt 203.0.113.5
+normCast recv /tmp/rx addr 232.1.2.3/7000 ssm 192.0.2.1 amt amt-relay.geant.org
 ```
 
-`amt <relayAddr>` routes the session through the AMT relay at `203.0.113.5`
-(UDP port 2268).  A non-default port can be included: `amt 203.0.113.5:2268`.
+`amt <relayAddr>` routes the session through the AMT relay.  A DNS hostname or
+an IPv4 address may be used.  The relay is contacted on UDP port 2268.
+
+The relay performs the AMT relay-discovery handshake (RFC 7450 §3): when
+`amt-relay.geant.org` is an anycast address the relay may redirect to a
+unicast address in its Advertisement; NORM handles this transparently.
 
 ### Parameter summary
 
