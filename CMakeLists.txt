@@ -247,6 +247,13 @@ if(NORM_BUILD_EXAMPLES)
         add_executable(${example} examples/${example}.cpp examples/normSocket.cpp)
         target_link_libraries(${example} PRIVATE norm protokit::protokit)
     endforeach()
+
+    # normCast uses NormPostProcessor which requires the platform implementation
+    if(WIN32)
+        target_sources(normCast PRIVATE src/win32/win32PostProcess.cpp)
+    else()
+        target_sources(normCast PRIVATE src/unix/unixPostProcess.cpp)
+    endif()
 endif()
 
 if(NORM_BUILD_TESTING)
