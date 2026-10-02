@@ -3,7 +3,6 @@
 
 #ifdef NORM_AMT
 #include "amt.h"
-#include "normAMTChannel.h"
 #endif
 
 #include "normMessage.h"
@@ -689,7 +688,6 @@ class NormSession
 #ifdef NORM_AMT
         bool OpenAMTGateway();
         void CloseAMTGateway();
-        void AMTSocketRecvHandler(ProtoSocket& theSocket, ProtoSocket::Event theEvent);
         bool OnAMTTimeout(ProtoTimer& theTimer);
 #endif // NORM_AMT
 
@@ -768,8 +766,7 @@ class NormSession
 #ifdef NORM_AMT
         ProtoAddress                    amt_relay_addr;  // optional AMT relay address
         amt_gateway_t*                  amt_gateway;     // AMT gateway handle (non-NULL when active)
-        NormAMTSocket                   amt_socket;      // wraps amt_gateway_fd() for event dispatch
-        ProtoTimer                      amt_timer;       // drives membership refresh
+        ProtoTimer                      amt_timer;       // polls for data and drives membership refresh
 #endif // NORM_AMT
         UINT8                           ttl;             // session multicast ttl   
         UINT8                           tos;             // session IPv4 TOS (or IPv6 traffic class - TBD)

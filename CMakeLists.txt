@@ -131,7 +131,7 @@ include(GNUInstallDirs)
 # Setup target
 if(NORM_AMT)
     list(APPEND COMMON_SOURCE_FILES libamt/amt.c)
-    list(APPEND PUBLIC_HEADER_FILES libamt/amt.h include/normAMTChannel.h)
+    list(APPEND PUBLIC_HEADER_FILES libamt/amt.h)
 endif()
 
 add_library(norm ${PLATFORM_SOURCE_FILES} ${COMMON_SOURCE_FILES} ${PUBLIC_HEADER_FILES})

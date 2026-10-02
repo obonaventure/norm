@@ -8,8 +8,13 @@
 #ifdef NORM_AMT
 #include <sys/socket.h>
 #include <netdb.h>
+#include <fcntl.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
+// Poll the AMT gateway fd at this interval; short enough for NORM protocol
+// timing (NACK, CC feedback) without excessive CPU overhead.
+static const double AMT_POLL_INTERVAL = 0.010; // 10 ms
 #endif // NORM_AMT
 
 #include "protoPktETH.h"
@@ -99,10 +104,8 @@ NormSession::NormSession(NormSessionMgr &sessionMgr, NormNodeId localNodeId)
 
 #ifdef NORM_AMT
     amt_gateway = NULL;
-    amt_socket.SetNotifier(&sessionMgr.GetSocketNotifier());
-    amt_socket.SetListener(this, &NormSession::AMTSocketRecvHandler);
     amt_timer.SetListener(this, &NormSession::OnAMTTimeout);
-    amt_timer.SetInterval(1.0);
+    amt_timer.SetInterval(AMT_POLL_INTERVAL);
     amt_timer.SetRepeat(-1);
 #endif // NORM_AMT
 
@@ -603,19 +606,19 @@ bool NormSession::OpenAMTGateway()
         return false;
     }
 
-    // Adopt the AMT gateway fd into amt_socket for event-driven dispatch
-    if (!amt_socket.Adopt(amt_gateway_fd(amt_gateway)))
+    // Set the gateway socket non-blocking so OnAMTTimeout() can drain it safely
+    int fd = amt_gateway_fd(amt_gateway);
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
     {
-        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: could not adopt AMT fd\n");
+        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: fcntl(O_NONBLOCK) failed: %s\n", GetErrorString());
         amt_gateway_close(amt_gateway);
         amt_gateway = NULL;
         return false;
     }
-    amt_socket.StartInputNotification();
 
-    // Schedule the first membership refresh timeout
-    int ms = amt_gateway_next_timeout_ms(amt_gateway);
-    amt_timer.SetInterval(ms > 0 ? ms * 1.0e-3 : 0.0);
+    // Poll for data and handle membership refresh via a repeating timer
+    amt_timer.SetInterval(AMT_POLL_INTERVAL);
     ActivateTimer(amt_timer);
 
     return true;
@@ -625,8 +628,6 @@ void NormSession::CloseAMTGateway()
 {
     if (amt_timer.IsActive())
         amt_timer.Deactivate();
-    if (amt_socket.IsOpen())
-        amt_socket.Release(); // release fd without closing it (AMT gateway owns it)
     if (amt_gateway)
     {
         amt_gateway_close(amt_gateway);
@@ -634,29 +635,13 @@ void NormSession::CloseAMTGateway()
     }
 } // end NormSession::CloseAMTGateway()
 
-void NormSession::AMTSocketRecvHandler(ProtoSocket& /*theSocket*/,
-                                       ProtoSocket::Event theEvent)
+bool NormSession::OnAMTTimeout(ProtoTimer& /*theTimer*/)
 {
-    if (ProtoSocket::RECV != theEvent) return;
+    if (!amt_gateway) return true;
 
+    // Drain all available datagrams from the AMT gateway socket
     uint8_t buf[NormMsg::MAX_SIZE];
-    struct sockaddr_storage from_ss, to_ss;
-    socklen_t from_len = sizeof(from_ss), to_len = sizeof(to_ss);
-    int ttl = 0;
 
-    ssize_t len = amt_gateway_recv(amt_gateway,
-                                   &from_ss, &from_len,
-                                   &to_ss, &to_len,
-                                   &ttl, buf, sizeof(buf));
-    if (len <= 0)
-        return; // control-plane only or error
-
-    NormMsg msg;
-    if (len > (ssize_t)NormMsg::MAX_SIZE)
-        len = NormMsg::MAX_SIZE;
-    memcpy(msg.AccessBuffer(), buf, len);
-
-    // Build ProtoAddress from sockaddr_storage using getnameinfo
     auto protoAddrFromSS = [](const struct sockaddr_storage& ss, socklen_t sslen, ProtoAddress& out) -> bool {
         char host[256], port[16];
         if (0 != getnameinfo((const struct sockaddr*)&ss, sslen, host, sizeof(host),
@@ -668,31 +653,46 @@ void NormSession::AMTSocketRecvHandler(ProtoSocket& /*theSocket*/,
         return true;
     };
 
-    ProtoAddress srcAddr;
-    protoAddrFromSS(from_ss, from_len, srcAddr);
-    msg.AccessAddress() = srcAddr;
+    for (;;)
+    {
+        struct sockaddr_storage from_ss, to_ss;
+        socklen_t from_len = sizeof(from_ss), to_len = sizeof(to_ss);
+        int ttl = 0;
 
-    if (msg.InitFromBuffer((unsigned int)len))
-    {
-        ProtoAddress dstAddr;
-        protoAddrFromSS(to_ss, to_len, dstAddr);
-        bool wasUnicast = dstAddr.IsValid() ? dstAddr.IsUnicast() : false;
-        HandleReceiveMessage(msg, wasUnicast);
-    }
-    else
-    {
-        PLOG(PL_ERROR, "NormSession::AMTSocketRecvHandler() warning: received bad message\n");
-    }
-} // end NormSession::AMTSocketRecvHandler()
+        ssize_t len = amt_gateway_recv(amt_gateway,
+                                       &from_ss, &from_len,
+                                       &to_ss, &to_len,
+                                       &ttl, buf, sizeof(buf));
+        if (len < 0) break;  // EAGAIN or error — socket drained
+        if (len == 0) continue; // control-plane only, no payload
 
-bool NormSession::OnAMTTimeout(ProtoTimer& /*theTimer*/)
-{
-    if (amt_gateway)
-    {
+        NormMsg msg;
+        if (len > (ssize_t)NormMsg::MAX_SIZE)
+            len = NormMsg::MAX_SIZE;
+        memcpy(msg.AccessBuffer(), buf, len);
+
+        ProtoAddress srcAddr;
+        protoAddrFromSS(from_ss, from_len, srcAddr);
+        msg.AccessAddress() = srcAddr;
+
+        if (msg.InitFromBuffer((unsigned int)len))
+        {
+            ProtoAddress dstAddr;
+            protoAddrFromSS(to_ss, to_len, dstAddr);
+            bool wasUnicast = dstAddr.IsValid() ? dstAddr.IsUnicast() : false;
+            HandleReceiveMessage(msg, wasUnicast);
+        }
+        else
+        {
+            PLOG(PL_ERROR, "NormSession::OnAMTTimeout() warning: received bad message\n");
+        }
+    }
+
+    // Trigger membership refresh if the AMT library says it is due
+    if (amt_gateway_next_timeout_ms(amt_gateway) <= 0)
         amt_gateway_timeout(amt_gateway);
-        int ms = amt_gateway_next_timeout_ms(amt_gateway);
-        amt_timer.SetInterval(ms > 0 ? ms * 1.0e-3 : 1.0);
-    }
+
+    // Keep the fixed poll interval; the timer repeats automatically
     return true;
 } // end NormSession::OnAMTTimeout()
 #endif // NORM_AMT
