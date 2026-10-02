@@ -897,6 +897,7 @@ void Usage()
                     "                [repeat <interval> [updatesOnly]] [id <nodeIdInteger>]\n"
                     "                [addr <addr>[/<port>]][txaddr <addr>[/<port>]][txport <port>]\n"
                     "                [interface <name>][reuse][loopback]\n"
+                    "                [ssm <sourceAddr>][amt <relayAddr>]\n"
                     "                [ack auto|<node1>[,<node2>,...]] [segment <bytes>]\n"
                     "                [block <count>] [parity <count>] [auto <count>]\n"
                     "                [cc|cce|ccl|rate <bitsPerSecond>] [rxloss <lossFraction>]\n"
@@ -936,7 +937,9 @@ int main(int argc, char* argv[])
     double txRate = 0.0; // used for non-default NORM_FIXED ccMode
     NormCaster::CCMode ccMode = NormCaster::NORM_CC;
     const char* mcastIface = NULL;
-    
+    const char* ssmSource = NULL;
+    const char* amtRelay = NULL;
+
     int debugLevel = 0;
     const char* debugLog = NULL;  // stderr by default
     bool trace = false;
@@ -1231,6 +1234,26 @@ int main(int argc, char* argv[])
                 return -1;
             }
             mcastIface = argv[i++];
+        }
+        else if (0 == strncmp(cmd, "ssm", len))
+        {
+            if (i >= argc)
+            {
+                fprintf(stderr, "normCast error: missing 'ssm' <sourceAddr>!\n");
+                Usage();
+                return -1;
+            }
+            ssmSource = argv[i++];
+        }
+        else if (0 == strncmp(cmd, "amt", len))
+        {
+            if (i >= argc)
+            {
+                fprintf(stderr, "normCast error: missing 'amt' <relayAddr>!\n");
+                Usage();
+                return -1;
+            }
+            amtRelay = argv[i++];
         }
         else if (0 == strncmp(cmd, "buffer", len))
         {
@@ -1579,6 +1602,24 @@ int main(int argc, char* argv[])
         normCast.SetNormTxRate(txRate);
     if (NULL != mcastIface)
         normCast.SetNormMulticastInterface(mcastIface);
+    if (NULL != ssmSource)
+    {
+        if (!NormSetSSM(normCast.GetSession(), ssmSource))
+        {
+            fprintf(stderr, "normCast error: NormSetSSM('%s') failed\n", ssmSource);
+            NormDestroyInstance(normInstance);
+            return -1;
+        }
+    }
+    if (NULL != amtRelay)
+    {
+        if (!NormSetAMTRelay(normCast.GetSession(), amtRelay))
+        {
+            fprintf(stderr, "normCast error: NormSetAMTRelay('%s') failed\n", amtRelay);
+            NormDestroyInstance(normInstance);
+            return -1;
+        }
+    }
     if ('\0' != sessionTxAddr[0])
         normCast.SetNormTxPort(sessionTxPort, reuse, sessionTxAddr);
     

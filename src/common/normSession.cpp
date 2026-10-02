@@ -5,6 +5,12 @@
 #include "normEncoderRS16.h" // 16-bit Reed-Solomon encoder of RFC 5510
 
 #include <time.h> // for gmtime() in NormTrace()
+#ifdef NORM_AMT
+#include <sys/socket.h>
+#include <netdb.h>
+#include <string.h>
+#include <stdio.h>
+#endif // NORM_AMT
 
 #include "protoPktETH.h"
 #include "protoPktIP.h"
@@ -90,6 +96,15 @@ NormSession::NormSession(NormSessionMgr &sessionMgr, NormNodeId localNodeId)
 
     rx_socket.SetNotifier(&sessionMgr.GetSocketNotifier());
     rx_socket.SetListener(this, &NormSession::RxSocketRecvHandler);
+
+#ifdef NORM_AMT
+    amt_gateway = NULL;
+    amt_socket.SetNotifier(&sessionMgr.GetSocketNotifier());
+    amt_socket.SetListener(this, &NormSession::AMTSocketRecvHandler);
+    amt_timer.SetListener(this, &NormSession::OnAMTTimeout);
+    amt_timer.SetInterval(1.0);
+    amt_timer.SetRepeat(-1);
+#endif // NORM_AMT
 
     tx_timer.SetListener(this, &NormSession::OnTxTimeout);
     tx_timer.SetInterval(0.0);
@@ -292,6 +307,18 @@ bool NormSession::Open()
         }
         if (!tx_only)
         {
+#ifdef NORM_AMT
+            if (amt_relay_addr.IsValid())
+            {
+                if (!OpenAMTGateway())
+                {
+                    PLOG(PL_FATAL, "NormSession::Open() OpenAMTGateway() error\n");
+                    Close();
+                    return false;
+                }
+            }
+            else
+#endif // NORM_AMT
             if (!rx_socket.JoinGroup(address, interfaceName, ssm_source_addr.IsValid() ? &ssm_source_addr : NULL))
             {
                 PLOG(PL_FATAL, "NormSession::Open() rx_socket.JoinGroup error\n");
@@ -369,6 +396,9 @@ void NormSession::Close()
         }
         rx_socket.Close();
     }
+#ifdef NORM_AMT
+    CloseAMTGateway();
+#endif // NORM_AMT
 #ifdef ECN_SUPPORT
     CloseProtoCap();
 #endif // ECN_SUPPORT
@@ -487,6 +517,185 @@ bool NormSession::SetSSM(const char *sourceAddress)
         return true;
     }
 } // end NormSession::SetSSM()
+
+bool NormSession::SetAMTRelay(const char *relayAddress)
+{
+#ifdef NORM_AMT
+    if (NULL != relayAddress)
+    {
+        if (amt_relay_addr.ResolveFromString(relayAddress))
+        {
+            if (!amt_relay_addr.GetPort())
+                amt_relay_addr.SetPort(2268); // default AMT port
+            return true;
+        }
+        else
+        {
+            PLOG(PL_ERROR, "NormSession::SetAMTRelay() error: invalid relay address\n");
+            return false;
+        }
+    }
+    else
+    {
+        amt_relay_addr.Invalidate();
+        return true;
+    }
+#else
+    PLOG(PL_ERROR, "NormSession::SetAMTRelay() error: NORM built without AMT support\n");
+    return false;
+#endif // NORM_AMT
+} // end NormSession::SetAMTRelay()
+
+#ifdef NORM_AMT
+bool NormSession::OpenAMTGateway()
+{
+    if (!ssm_source_addr.IsValid())
+    {
+        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: SSM source address required for AMT\n");
+        return false;
+    }
+
+    // Build sockaddr structures for relay, group, and source via getaddrinfo()
+    auto resolveAddr = [](const ProtoAddress& protoAddr, struct sockaddr_storage& ss, socklen_t& len) -> bool {
+        char host[256], port[16];
+        if (!protoAddr.GetHostString(host, sizeof(host)))
+            return false;
+        snprintf(port, sizeof(port), "%u", protoAddr.GetPort());
+        struct addrinfo hints, *res = NULL;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_DGRAM;
+        hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
+        if (0 != getaddrinfo(host, protoAddr.GetPort() ? port : NULL, &hints, &res) || !res)
+            return false;
+        memcpy(&ss, res->ai_addr, res->ai_addrlen);
+        len = (socklen_t)res->ai_addrlen;
+        freeaddrinfo(res);
+        return true;
+    };
+
+    struct sockaddr_storage relay_ss, group_ss, source_ss;
+    socklen_t relay_len = 0, group_len = 0, source_len = 0;
+
+    if (!resolveAddr(amt_relay_addr, relay_ss, relay_len))
+    {
+        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: could not resolve relay address\n");
+        return false;
+    }
+    if (!resolveAddr(address, group_ss, group_len))
+    {
+        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: could not resolve group address\n");
+        return false;
+    }
+    if (!resolveAddr(ssm_source_addr, source_ss, source_len))
+    {
+        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: could not resolve SSM source address\n");
+        return false;
+    }
+
+    amt_gateway = amt_gateway_open((struct sockaddr*)&relay_ss, relay_len,
+                                   (struct sockaddr*)&group_ss, group_len,
+                                   (struct sockaddr*)&source_ss, source_len,
+                                   1 /* SSM */, 5000 /* ms */, 3 /* retries */);
+    if (!amt_gateway)
+    {
+        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: amt_gateway_open() failed: %s\n", GetErrorString());
+        return false;
+    }
+
+    // Adopt the AMT gateway fd into amt_socket for event-driven dispatch
+    if (!amt_socket.Adopt(amt_gateway_fd(amt_gateway)))
+    {
+        PLOG(PL_ERROR, "NormSession::OpenAMTGateway() error: could not adopt AMT fd\n");
+        amt_gateway_close(amt_gateway);
+        amt_gateway = NULL;
+        return false;
+    }
+    amt_socket.StartInputNotification();
+
+    // Schedule the first membership refresh timeout
+    int ms = amt_gateway_next_timeout_ms(amt_gateway);
+    amt_timer.SetInterval(ms > 0 ? ms * 1.0e-3 : 0.0);
+    ActivateTimer(amt_timer);
+
+    return true;
+} // end NormSession::OpenAMTGateway()
+
+void NormSession::CloseAMTGateway()
+{
+    if (amt_timer.IsActive())
+        amt_timer.Deactivate();
+    if (amt_socket.IsOpen())
+        amt_socket.Release(); // release fd without closing it (AMT gateway owns it)
+    if (amt_gateway)
+    {
+        amt_gateway_close(amt_gateway);
+        amt_gateway = NULL;
+    }
+} // end NormSession::CloseAMTGateway()
+
+void NormSession::AMTSocketRecvHandler(ProtoSocket& /*theSocket*/,
+                                       ProtoSocket::Event theEvent)
+{
+    if (ProtoSocket::RECV != theEvent) return;
+
+    uint8_t buf[NormMsg::MAX_SIZE];
+    struct sockaddr_storage from_ss, to_ss;
+    socklen_t from_len = sizeof(from_ss), to_len = sizeof(to_ss);
+    int ttl = 0;
+
+    ssize_t len = amt_gateway_recv(amt_gateway,
+                                   &from_ss, &from_len,
+                                   &to_ss, &to_len,
+                                   &ttl, buf, sizeof(buf));
+    if (len <= 0)
+        return; // control-plane only or error
+
+    NormMsg msg;
+    if (len > (ssize_t)NormMsg::MAX_SIZE)
+        len = NormMsg::MAX_SIZE;
+    memcpy(msg.AccessBuffer(), buf, len);
+
+    // Build ProtoAddress from sockaddr_storage using getnameinfo
+    auto protoAddrFromSS = [](const struct sockaddr_storage& ss, socklen_t sslen, ProtoAddress& out) -> bool {
+        char host[256], port[16];
+        if (0 != getnameinfo((const struct sockaddr*)&ss, sslen, host, sizeof(host),
+                             port, sizeof(port), NI_NUMERICHOST | NI_NUMERICSERV))
+            return false;
+        if (!out.ResolveFromString(host))
+            return false;
+        out.SetPort((UINT16)atoi(port));
+        return true;
+    };
+
+    ProtoAddress srcAddr;
+    protoAddrFromSS(from_ss, from_len, srcAddr);
+    msg.AccessAddress() = srcAddr;
+
+    if (msg.InitFromBuffer((unsigned int)len))
+    {
+        ProtoAddress dstAddr;
+        protoAddrFromSS(to_ss, to_len, dstAddr);
+        bool wasUnicast = dstAddr.IsValid() ? dstAddr.IsUnicast() : false;
+        HandleReceiveMessage(msg, wasUnicast);
+    }
+    else
+    {
+        PLOG(PL_ERROR, "NormSession::AMTSocketRecvHandler() warning: received bad message\n");
+    }
+} // end NormSession::AMTSocketRecvHandler()
+
+bool NormSession::OnAMTTimeout(ProtoTimer& /*theTimer*/)
+{
+    if (amt_gateway)
+    {
+        amt_gateway_timeout(amt_gateway);
+        int ms = amt_gateway_next_timeout_ms(amt_gateway);
+        amt_timer.SetInterval(ms > 0 ? ms * 1.0e-3 : 1.0);
+    }
+    return true;
+} // end NormSession::OnAMTTimeout()
+#endif // NORM_AMT
 
 // This must be called _before_ sender or receiver is started
 // (i.e., before socket(s) are opened)

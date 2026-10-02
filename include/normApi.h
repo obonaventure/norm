@@ -373,6 +373,10 @@ bool NormSetSSM(NormSessionHandle sessionHandle,
                 const char*       sourceAddress);
 
 NORM_API_LINKAGE
+bool NormSetAMTRelay(NormSessionHandle sessionHandle,
+                     const char*       relayAddress);
+
+NORM_API_LINKAGE
 bool NormSetTTL(NormSessionHandle sessionHandle,
                 unsigned char     ttl);
 

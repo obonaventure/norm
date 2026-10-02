@@ -1341,6 +1341,25 @@ bool NormSetSSM(NormSessionHandle sessionHandle,
 }  // end NormSetSSM()
 
 NORM_API_LINKAGE
+bool NormSetAMTRelay(NormSessionHandle sessionHandle,
+                     const char*       relayAddress)
+{
+    bool result = false;
+    NormInstance* instance = NormInstance::GetInstanceFromSession(sessionHandle);
+    if (NULL != instance)
+    {
+        if (instance->dispatcher.SuspendThread())
+        {
+            NormSession* session = (NormSession*)sessionHandle;
+            if (session)
+                result = session->SetAMTRelay(relayAddress);
+            instance->dispatcher.ResumeThread();
+        }
+    }
+    return result;
+}  // end NormSetAMTRelay()
+
+NORM_API_LINKAGE
 bool NormSetTTL(NormSessionHandle sessionHandle,
                 unsigned char     ttl)
 {

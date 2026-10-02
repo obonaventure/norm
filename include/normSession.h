@@ -1,6 +1,11 @@
 #ifndef _NORM_SESSION
 #define _NORM_SESSION
 
+#ifdef NORM_AMT
+#include "amt.h"
+#include "normAMTChannel.h"
+#endif
+
 #include "normMessage.h"
 #include "normObject.h"
 #include "normNode.h"
@@ -189,6 +194,7 @@ class NormSession
         void SetAddress(const ProtoAddress& addr) {address = addr;}
         bool SetMulticastInterface(const char* interfaceName);
         bool SetSSM(const char* sourceAddress);
+        bool SetAMTRelay(const char* relayAddress);
         bool SetTTL(UINT8 theTTL) 
         {
             bool result = tx_socket->IsOpen() ? tx_socket->SetTTL(theTTL) : true;
@@ -678,8 +684,14 @@ class NormSession
         bool OnUserTimeout(ProtoTimer& theTimer);
         
         void TxSocketRecvHandler(ProtoSocket& theSocket, ProtoSocket::Event theEvent);
-        void RxSocketRecvHandler(ProtoSocket& theSocket, ProtoSocket::Event theEvent);        
+        void RxSocketRecvHandler(ProtoSocket& theSocket, ProtoSocket::Event theEvent);
         void HandleReceiveMessage(NormMsg& msg, bool wasUnicast, bool ecn = false);
+#ifdef NORM_AMT
+        bool OpenAMTGateway();
+        void CloseAMTGateway();
+        void AMTSocketRecvHandler(ProtoSocket& theSocket, ProtoSocket::Event theEvent);
+        bool OnAMTTimeout(ProtoTimer& theTimer);
+#endif // NORM_AMT
 
 #ifdef ECN_SUPPORT        
         // This is used when raw packet capture is enabled
@@ -753,6 +765,12 @@ class NormSession
         NormNodeId                      local_node_id;
         ProtoAddress                    address;         // session destination address/port
         ProtoAddress                    ssm_source_addr; // optional SSM source address
+#ifdef NORM_AMT
+        ProtoAddress                    amt_relay_addr;  // optional AMT relay address
+        amt_gateway_t*                  amt_gateway;     // AMT gateway handle (non-NULL when active)
+        NormAMTSocket                   amt_socket;      // wraps amt_gateway_fd() for event dispatch
+        ProtoTimer                      amt_timer;       // drives membership refresh
+#endif // NORM_AMT
         UINT8                           ttl;             // session multicast ttl   
         UINT8                           tos;             // session IPv4 TOS (or IPv6 traffic class - TBD)
         bool                            loopback;        // receive own traffic it true

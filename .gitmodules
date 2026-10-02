@@ -1,3 +1,6 @@
 [submodule "protolib"]
 	path = protolib
 	url = https://github.com/USNavalResearchLaboratory/protolib.git
+[submodule "libamt"]
+	path = libamt
+	url = git@forge.uclouvain.be:inl/multicast-quic/libamt.git
